@@ -1,92 +1,46 @@
 const express = require("express");
+const helmet = require("helmet");
+const cors = require("cors");
 const server = express();
-const bcrypt = require('bcryptjs');
 const session = require('express-session');
-// const router = express.Router();
-const { addUser, getAllUsers, getUserByUsername, updateUser } = require("./models");
-server.use(express.json());
-server.use(
-  session({
-    name: 'notsession', // default is connect.sid
-    secret: 'nobody tosses a dwarf!',
-    cookie: {
-      maxAge: 1 * 24 * 60 * 60 * 1000, // 1 day in milliseconds
-      secure: false, //only set cookies over https. do not send back a cookie over http. 
-      httpOnly: true,
-    },
-    // don't let JS code access cookies. Browser extensions run JS code on your browser!
-    resave: false, //saves session even if session is not modified
-    saveUninitialized: false, //don't save until they've accept cookies
+const usersRouter = require("./api/users/users-router");
+const authRouter = require("./api/auth/auth-router");
+const KnexSessionStore = require("connect-session-knex")(session)
+
+const config = {
+  name: 'sessionId', 
+  secret: "It's a lovely day in the village, and you are a horrible goose.",
+  cookie: {
+    maxAge: 1 * 24 * 60 * 60 * 1000, //1 day
+    secure: false, //change to true in production 
+    httpOnly: true,
+  },
+  resave: false,
+  saveUninitialized: false, 
+  store: new KnexSessionStore({
+    knex: require("./data/dbconfig.js"), // configured instance of knex
+    tablename: "sessions", // table that will store sessions inside the db, name it anything you want
+    sidfieldname: "sid", // column that will hold the session id, name it anything you want
+    createtable: true, // if the table does not exist, it will create it automatically
+    clearInterval: 1000 * 60 * 60, // time it takes to check for old sessions and remove them from the database to keep it clean and performant
   })
-)
-server.use('/api/users', protected);
-
-server.get('/api/login', (req, res) => {
-  const credentials = req.body;
-  getUserByUsername(req.body.username)
-    .then(data => {
-      if (data.length > 0) {
-        if (!bcrypt.compareSync(credentials.password, data[0].password)) {
-          return res.status(401).json({ error: 'Incorrect credentials' });
-        } else {
-          req.session.name = data[0].username;
-          const logged = {logged_in: true}
-          updateHelper(data[0].username, logged);
-          res.status(200).json(req.session.name)
-        }
-      } else {
-        res.status(404).json(`User not found.`)
-      }
-    })
-    .catch(err => {
-      console.log(err);
-      res.status(500).json(`Error logging in.`)
-    })
-});
-server.post('/api/register', (req, res) => {
-  const credentials = req.body;
-  const hash = bcrypt.hashSync(credentials.password, 14);
-  credentials.password = hash;
-  addUser(credentials)
-    .then(data => {
-      res.status(201).json(data);
-    })
-    .catch(err => {
-      console.log(err);
-      res.status(500).json(`Error add user to database.`);
-    })
-});
-server.put('/api/logout', (req, res) => {
-  req.session.destroy(err => {
-    if (err) {
-      res.status(500).json(`Error logging out.`)
-    } else {
-      res.status(200).json(`User logged out.`);
-    }
-  })
-});
-
-server.get('/api/users', (req, res) => {
-  getAllUsers()
-    .then(data => {
-      res.status(200).json(data);
-    })
-    .catch(err => {
-      console.log(err);
-      res.status(500).json(`Error getting users.`);
-    })
-});
-
-function updateHelper(username, logged) {
-  updateUser(username, logged);
 }
 
+server.use(express.json());
+server.use(helmet());
+server.use(cors());
+server.use(session(config));
+
+//routers
+server.use('/api/', authRouter);
+server.use('/api/users', protected, usersRouter);
+
+//middleware
 function protected(req, res, next) {
-  console.log(req.session)
   if (req.session && req.session.name) {
     next();
   } else {
-    res.status(401).json({ message: 'you shall not pass!!' });
+    res.status(401).json({ message: 'User is not authorized.' });
   }
 }
 server.listen(5000, () => {
